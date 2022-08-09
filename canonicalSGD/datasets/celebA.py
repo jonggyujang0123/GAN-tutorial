@@ -6,69 +6,38 @@ import numpy as np
 import imageio
 
 import torch
-import torchvision.transforms as v_transforms
-import torchvision.utils as v_utils
-import torchvision.datasets as v_datasets
 
-from torch.utils.data import DataLoader, TensorDataset, Dataset
+from torchvision import transforms, datasets
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, TensorDataset, Dataset
 
+def get_loader_celeba(cfg, args):
+    transform_train = transforms.Compose([
+        transforms.Resize((cfg.img_size, cfg.img_size)),
+        transforms.CenterCrop((cfg.img_size, cfg.img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=cfg.data_mean, std=cfg.data_std)
+        ])
 
-class CelebADataLoader:
-    def __init__(self, config):
-        self.config = config
+    if args.local_rank not in [-1,0]:
+        torch.distributed.barrier()
 
-        if config.data_mode == "imgs":
-            transform = v_transforms.Compose(
-                [v_transforms.CenterCrop(64),
-                 v_transforms.ToTensor(),
-                 v_transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+    if cfg.dataset == "celebA":
+        dataset_train = datasets.CelebA(root="../data",
+                                         split = 'all',
+                                         download=True,
+                                         transform = transform_train,
+                                         )
+    else:
+        raise Exception("Please check dataset name in cfg again ('celebA'")
+    
+    if args.local_rank == 0:
+        torch.distributed.barrier()
 
-            dataset = v_datasets.ImageFolder(self.config.data_folder, transform=transform)
-
-            self.dataset_len = len(dataset)
-
-            self.num_iterations = (self.dataset_len + config.batch_size - 1) // config.batch_size
-
-            self.loader = DataLoader(dataset,
-                                     batch_size=config.batch_size,
-                                     shuffle=True,
-                                     num_workers=config.data_loader_workers,
-                                     pin_memory=config.pin_memory)
-        elif config.data_mode == "numpy":
-            raise NotImplementedError("This mode is not implemented YET")
-        else:
-            raise Exception("Please specify in the json a specified mode in data_mode")
-
-    def plot_samples_per_epoch(self, fake_batch, epoch):
-        """
-        Plotting the fake batch
-        :param fake_batch: Tensor of shape (B,C,H,W)
-        :param epoch: the number of current epoch
-        :return: img_epoch: which will contain the image of this epoch
-        """
-        img_epoch = '{}samples_epoch_{:d}.png'.format(self.config.out_dir, epoch)
-        v_utils.save_image(fake_batch,
-                           img_epoch,
-                           nrow=4,
-                           padding=2,
-                           normalize=True)
-        return imageio.imread(img_epoch)
-
-    def make_gif(self, epochs):
-        """
-        Make a gif from a multiple images of epochs
-        :param epochs: num_epochs till now
-        :return:
-        """
-        gen_image_plots = []
-        for epoch in range(epochs + 1):
-            img_epoch = '{}samples_epoch_{:d}.png'.format(self.config.out_dir, epoch)
-            try:
-                gen_image_plots.append(imageio.imread(img_epoch))
-            except OSError as e:
-                pass
-
-        imageio.mimsave(self.config.out_dir + 'animation_epochs_{:d}.gif'.format(epochs), gen_image_plots, fps=2)
-
-    def finalize(self):
-        pass
+    train_sampler = RandomSampler(dataset_train) if args.local_rank == -1 else DistributedSampler(dataset_train)
+    train_loader = DataLoader(dataset_train,
+                              sampler=train_sampler,
+                              batch_size = cfg.train_batch_size,
+                              num_workers = cfg.num_workers,
+                              pin_memory=cfg.pin_memory
+                              )
+    return train_loader
