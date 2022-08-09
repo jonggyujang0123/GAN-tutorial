@@ -1,10 +1,13 @@
-# Pytorch-Project-Template
+# Generator-Tutorials
+
+Table of Contents
+- [# GAN](# GAN)
 
 ## Features
 - (multi-node/gpu) (training/validation/test)
 - Weight and bias (Wandb) MLops
 - Easy Code Structure
-- CIFAR10/100 dataset, (*you can add your custom dataset easily)
+- CelebA dataset
 - Customizable configuration
 
 ## Requirements and Setup
@@ -38,13 +41,12 @@ python setup.py develop
 
 ## Wandb implementation 
 
-![스크린샷 2022-07-22 오후 5 02 54](https://user-images.githubusercontent.com/88477912/180393054-605830cd-b369-449d-83e9-cfbf73c90aba.png)
+![image](https://user-images.githubusercontent.com/88477912/183642792-1f2559c7-8726-4fd5-9bc6-14914a94d434.png)
 
 ** You can turn off the wandb log by editing the below line**
 ```
 os.environ['WANDB_SILENT'] = "true"
 ```
-in agents/mnist.py
 
 # Details:
 
@@ -66,7 +68,7 @@ python tools/main.py --config config/...yaml --test 1
 ### Training
 
 ```
-sh tools/dist_train.sh <#GPUS> --RESUME 1
+sh tools/dist_train.sh <#GPUS> <1 for resume>
 ```
 
 ### Test
@@ -77,8 +79,20 @@ sh tools/dist_test.sh <#GPUS>
 
 ## Results
 
-- CIFAR100 dataset: 77%
+# GAN
 
+## Results 
+![image](https://user-images.githubusercontent.com/88477912/183643008-eaa66d9d-0b56-4736-9112-e9bb9e6ef045.png)
+![image](https://user-images.githubusercontent.com/88477912/183643062-1ae8882d-beca-48d4-8440-8dfabd33a24a.png)
+![image](https://user-images.githubusercontent.com/88477912/183643110-52e5c405-fb6b-4d53-9d42-c0c6c4bdd359.png)
+
+## Loss functions
+
+<img width="355" alt="image" src="https://user-images.githubusercontent.com/88477912/183643233-fcdc5355-75c2-4836-834a-44fcaff1448a.png">
+
+<img width="347" alt="image" src="https://user-images.githubusercontent.com/88477912/183643254-88271475-9521-4d29-bbbc-f7de1baf8ee2.png">
+
+# VAE
 
 ### License:
 This project is licensed under MIT License - see the LICENSE file for details
