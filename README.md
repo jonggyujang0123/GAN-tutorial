@@ -1,7 +1,7 @@
 # Generator-Tutorials
 
 Table of Contents
-- [# GAN](# GAN)
+- (# GAN)[# GAN](# GAN)
 
 ## Features
 - (multi-node/gpu) (training/validation/test)
