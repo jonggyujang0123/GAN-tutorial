@@ -39,7 +39,7 @@ python setup.py develop
 
 ## Wandb implementation 
 
-![image](https://user-images.githubusercontent.com/88477912/183642792-1f2559c7-8726-4fd5-9bc6-14914a94d434.png)
+<img width="1098" alt="image" src="https://user-images.githubusercontent.com/88477912/183643650-ab42b226-8351-4ccf-ac44-880a88e5e13d.png">
 
 ** You can turn off the wandb log by editing the below line**
 ```
@@ -75,7 +75,6 @@ sh tools/dist_train.sh <#GPUS> <1 for resume>
 sh tools/dist_test.sh <#GPUS>
 ```
 
-## Results
 
 # GAN
 
