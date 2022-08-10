@@ -1,87 +1,72 @@
 """
 Mnist Data loader, as given in Mnist tutorial
 """
-import imageio
+import logging
 import torch
-import torchvision.utils as v_utils
-from torchvision import datasets, transforms
 
-from torch.utils.data import DataLoader, TensorDataset, Dataset
+from torchvision import transforms, datasets
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler
 
+logger = logging.getLogger()
 
-class MnistDataLoader:
-    def __init__(self, config):
-        """
-        :param config:
-        """
-        self.config = config
-        transform_train = transforms.Compose([transforms.ToTensor(),
-                                        transforms.Normalize((0.1307,), (0.3081,))])
-        transform_test = transforms.Compose([transforms.ToTensor(),
-                                        transforms.Normalize((0.1307,), (0.3081,))])
-        if config.data_mode == "download":
-            dataset = datasets.MNIST('./data', train=True, download=True,
-                                   transform=transform_train)
-            dataset_train, dataset_val = torch.utils.data.random_split(dataset, [50000, 10000], generator=torch.Generator().manual_seed(1))
-            dataset_test = datasets.MNIST('./data',
-                                        train=False,
-                                        download=True,
-                                        transform=transform_test)
-            self.train_loader = torch.utils.data.DataLoader(dataset_train,
-                                                            batch_size=self.config.batch_size,
-                                                            shuffle=True,
-                                                            num_workers=self.config.data_loader_workers,
-                                                            pin_memory=self.config.pin_memory)
-            self.val_loader = torch.utils.data.DataLoader(dataset_val,
-                                                        batch_size=self.config.test_batch_size,
-                                                        shuffle=True,
-                                                        num_workers=self.config.data_loader_workers,
-                                                        pin_memory=self.config.pin_memory)
-            self.test_loader = torch.utils.data.DataLoader(dataset_test,
-                                                        batch_size=self.config.test_batch_size,
-                                                        shuffle=True,
-                                                        num_workers=self.config.data_loader_workers,
-                                                        pin_memory=self.config.pin_memory)
-        elif config.data_mode == "imgs":
-            raise NotImplementedError("This mode is not implemented YET")
+def get_loader_mnist(cfg, args):
+    transform_train = transforms.Compose([
+        transforms.Resize((cfg.img_size, cfg.img_size)),
+        #transforms.RandomResizedCrop((cfg.img_size, cfg.img_size), scale= (0.05, 1.0)),
+        transforms.ToTensor(),
+#        transforms.Normalize(mean=cfg.data_mean, std=cfg.data_std)
+        ])
 
-        elif config.data_mode == "numpy":
-            raise NotImplementedError("This mode is not implemented YET")
+    transform_val = transforms.Compose([
+        transforms.Resize((cfg.img_size, cfg.img_size)),
+        #transforms.RandomResizedCrop((cfg.img_size, cfg.img_size), scale= (0.05, 1.0)),
+        transforms.ToTensor(),
+#        transforms.Normalize(mean=cfg.data_mean, std=cfg.data_std)
+        ])
+    transform_test = transform_val
 
-        else:
-            raise Exception("Please specify in the json a specified mode in data_mode")
+    if args.local_rank not in [-1,0]:
+        torch.distributed.barrier()
 
-    def plot_samples_per_epoch(self, batch, epoch):
-        """
-        Plotting the batch images
-        :param batch: Tensor of shape (B,C,H,W)
-        :param epoch: the number of current epoch
-        :return: img_epoch: which will contain the image of this epoch
-        """
-        img_epoch = '{}samples_epoch_{:d}.png'.format(self.config.out_dir, epoch)
-        v_utils.save_image(batch,
-                           img_epoch,
-                           nrow=4,
-                           padding=2,
-                           normalize=True)
-        return imageio.imread(img_epoch)
+    if cfg.dataset == "mnist":
+        dataset_train = datasets.MNIST(root="../data",
+                                         train=True,
+                                         download=True,
+                                         transform = transform_train,
+                                         )
+        dataset_val = datasets.MNIST(root="../data",
+                                         train=False,
+                                         download=True,
+                                         transform = transform_val,
+                                         )
+        dataset_test = datasets.MNIST(root="../data",
+                                         train=False,
+                                         download=True,
+                                         transform=transform_test,
+                                         ) 
+    else:
+        raise Exception("Please check dataset name in cfg again ('cifar10' or 'cifar100'")
+    
+    if args.local_rank == 0:
+        torch.distributed.barrier()
 
-    def make_gif(self, epochs):
-        """
-        Make a gif from a multiple images of epochs
-        :param epochs: num_epochs till now
-        :return:
-        """
-        gen_image_plots = []
-        for epoch in range(epochs + 1):
-            img_epoch = '{}samples_epoch_{:d}.png'.format(self.config.out_dir, epoch)
-            try:
-                gen_image_plots.append(imageio.imread(img_epoch))
-            except OSError as e:
-                pass
-
-        imageio.mimsave(self.config.out_dir + 'result.gif'.format(epochs), gen_image_plots, fps=2)
-
-    def finalize(self):
-        pass
-
+    train_sampler = RandomSampler(dataset_train) if args.local_rank == -1 else DistributedSampler(dataset_train)
+    val_sampler = RandomSampler(dataset_val) if args.local_rank == -1 else DistributedSampler(dataset_val)
+#    val_sampler = SequentialSampler(dataset_val)
+    test_sampler = RandomSampler(dataset_test) if args.local_rank == -1 else DistributedSampler(dataset_test)
+    train_loader = DataLoader(dataset_train,
+                              sampler=train_sampler,
+                              batch_size = cfg.train_batch_size,
+                              num_workers = cfg.num_workers,
+                              pin_memory=cfg.pin_memory)
+    val_loader = DataLoader(dataset_val,
+                              sampler=val_sampler,
+                              batch_size = cfg.train_batch_size,
+                              num_workers = cfg.num_workers,
+                              pin_memory=cfg.pin_memory) 
+    test_loader = DataLoader(dataset_test,
+                              sampler=test_sampler,
+                              batch_size = cfg.test_batch_size,
+                              num_workers = cfg.num_workers,
+                              pin_memory=cfg.pin_memory)
+    return train_loader, val_loader, test_loader

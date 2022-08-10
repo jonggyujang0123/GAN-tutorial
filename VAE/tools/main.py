@@ -12,12 +12,13 @@ from tqdm import tqdm
 from easydict import EasyDict as edict
 import yaml
 import torchvision.utils as vutils
+import torch.nn.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
 """ ==========END================"""
 
 """ =========Configurable ======="""
-from models.Conv_T import Generator, Discriminator, weights_init
-#os.environ["WANDB_SILENT"] = 'true'
-
+from models.VAE import VAE
 """ ===========END=========== """
 
 def parse_args():
@@ -45,6 +46,8 @@ def get_data_loader(cfg, args):
         from datasets.cifar import get_loader_cifar as get_loader
     if cfg.dataset in ['celebA']:
         from datasets.celebA import get_loader_celeba as get_loader
+    if cfg.dataset in ['mnist']:
+        from datasets.mnist import get_loader_mnist as get_loader
 
     return get_loader(cfg, args)
 
@@ -98,30 +101,23 @@ def save_ckpt(checkpoint_fpath, checkpoint, is_best=False):
         shutil.copyfile(ckpt_path,
                         ckpt_path_best)
 
+# Reconstruction + KL divergence loss
+def loss_function(recon_x, x, mu ,log_var):
+    BCE = F.binary_cross_entropy(recon_x, torch.flatten(x,1), reduction='sum')
+    KLD = -0.5 * torch.sum(1+log_var - mu.pow(2) - log_var.exp())
+    return BCE + KLD
 
 
-
-def train(wandb, args, cfg, ddp_model_g, ddp_model_d):
+def train(wandb, args, cfg, model):
     ## Setting 
-    criterion = nn.BCELoss()
-    # Create batch of latent vectors that will be used for visualization
-    fixed_noise = torch.randn(cfg.test_batch_size, cfg.n_z, 1,1, device = cfg.device)
-
-    # real/fake labels
-    real_label =1.0
-    fake_label= 0.0
-
     # optmizer 
-    optimizer_d = optim.Adam(ddp_model_d.parameters(), lr = cfg.lr, betas = (cfg.beta, 0.999))
-    optimizer_g = optim.Adam(ddp_model_g.parameters(), lr = cfg.lr, betas = (cfg.beta, 0.999))
+    optimizer = optim.Adam(model.parameters(), lr = cfg.lr, betas = (cfg.beta, 0.999))
     scaler = torch.cuda.amp.GradScaler(enabled=cfg.use_amp)
-    train_loader = get_data_loader(cfg=cfg, args=args)
+    train_loader, val_loader, test_loader = get_data_loader(cfg=cfg, args=args)
     if cfg.decay_type == "cosine":
-        scheduler_d = WarmupCosineSchedule(optimizer_d, warmup_steps=cfg.warmup_steps, t_total=cfg.epochs*len(train_loader))
-        scheduler_g = WarmupCosineSchedule(optimizer_g, warmup_steps=cfg.warmup_steps, t_total=cfg.epochs*len(train_loader))
+        scheduler = WarmupCosineSchedule(optimizer, warmup_steps=cfg.warmup_steps, t_total=cfg.epochs*len(train_loader))
     else:
-        scheduler_d = WarmupLinearSchedule(optimizer_d, warmup_steps=cfg.warmup_steps, t_total=cfg.epochs*len(train_loader))
-        scheduler_g = WarmupLinearSchedule(optimizer_g, warmup_steps=cfg.warmup_steps, t_total=cfg.epochs*len(train_loader))
+        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=cfg.warmup_steps, t_total=cfg.epochs*len(train_loader))
     
     # Start Training Loop
     start_epoch =0
@@ -130,20 +126,14 @@ def train(wandb, args, cfg, ddp_model_g, ddp_model_d):
     # To resume the device for the save model woule be also "cuda:0"
     if args.resume:
         ckpt = load_ckpt(cfg.ckpt_fpath)
-        optimizer_d.load_state_dict(ckpt['optimizer_d'])
-        optimizer_g.load_state_dict(ckpt['optimizer_g'])
-        scheduler_d.load_state_dict(ckpt['scheduler_d'])
-        scheduler_g.load_state_dict(ckpt['scheduler_g'])
+        optimizer.load_state_dict(ckpt['optimizer'])
+        scheduler.load_state_dict(ckpt['scheduler'])
         start_epoch = ckpt['epoch']+1
 
         
-    ddp_model_g.train()
-    ddp_model_d.train()
+    model.train()
     # List of Tracking results 
-    Loss_g= AverageMeter()
-    Loss_d= AverageMeter()
-    D_x_total= AverageMeter()
-    D_G_z_total= AverageMeter()
+    Loss= AverageMeter()
 
     # Prepare dataset and dataloader
     for epoch in range(start_epoch, cfg.epochs):
@@ -152,95 +142,40 @@ def train(wandb, args, cfg, ddp_model_g, ddp_model_d):
 
         tepoch = tqdm(train_loader, 
                       disable=args.local_rank not in [-1,0])
+        model.train()
         for data in tepoch:
             ########################################
             # (1) Update Discriminator (Real data)
             ########################################
-            optimizer_d.zero_grad()
+            optimizer.zero_grad()
             inputs = data[0].to(cfg.device, non_blocking=True)
-            label = torch.full((inputs.size(0),), real_label, dtype=torch.float, device= cfg.device)
             with torch.cuda.amp.autocast(enabled=cfg.use_amp):
-                outputs = ddp_model_d(inputs).view(-1)
-                err_real_d = criterion(outputs, label)
-            scaler.scale(err_real_d).backward()
-            scaler.step(optimizer_d)
+                recon_batch, mu, log_var = model(inputs) 
+                loss = loss_function(recon_batch, inputs, mu, log_var)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
             if args.local_rank in [-1,0]:
-                D_x = outputs.detach().mean().item()
-                D_x_total.update(D_x, inputs.size(0))
-
-            #######################################
-            # (2) Update Discriminator (Fake data)
-            #######################################
-            
-            optimizer_d.zero_grad()
-            latent_vector = torch.randn(inputs.size(0), cfg.n_z, 1,1, device = cfg.device)
-            label.fill_(fake_label)
-            with torch.cuda.amp.autocast(enabled=cfg.use_amp):
-                fake = ddp_model_g(latent_vector)
-                outputs = ddp_model_d(fake.detach()).view(-1)
-                err_fake_d = criterion(outputs, label)
-            scaler.scale(err_fake_d).backward()
-            scaler.step(optimizer_d)
-            scaler.update()
-            scheduler_d.step()
+                Loss.update(loss.mean().item()/inputs.size(0),inputs.size(0))
             if args.local_rank in [-1,0]:
-                err_d = err_fake_d + err_real_d
-                Loss_d.update(err_d.detach().mean().item(),inputs.size(0))
-
-            ########################################
-            # (3) Update Generator 
-            #######################################
-            
-            optimizer_g.zero_grad()
-            label.fill_(real_label)
-            with torch.cuda.amp.autocast(enabled=cfg.use_amp):
-                outputs = ddp_model_d(fake).view(-1)
-                err_g = criterion(outputs,label)
-            scaler.scale(err_g).backward()
-            scaler.step(optimizer_g)
-            scaler.update()
-            scheduler_g.step()
-
-            if args.local_rank in [-1,0]:
-                Loss_g.update(err_g.detach().item(),inputs.size(0))
-                D_G_z = outputs.mean().item()
-                D_G_z_total.update(D_G_z,inputs.size(0))
-            
-            ########################################
-            # (4) Output of the training 
-            #######################################
-            with torch.no_grad():
-                with torch.cuda.amp.autocast(enabled=cfg.use_amp):
-                    fake_sample = ddp_model_g(fixed_noise).detach().cpu()
-
-            if args.local_rank in [-1,0]:
-                tepoch.set_description(f'Epoch {epoch}: loss_D: {Loss_d.avg:2.4f}, Loss_G: {Loss_g.avg:2.4f}, lr : {scheduler_d.get_lr()[0]:.2E}')
+                tepoch.set_description(f'Epoch {epoch}: loss is {Loss.avg}, lr is {scheduler.get_lr()[0]:.2E} ')
+        test(wandb,args, cfg, model, test_loader)
         if args.local_rank in [-1,0]:
-            model_to_save_g = ddp_model_g.module if hasattr(ddp_model_g, 'module') else ddp_model_g
-            model_to_save_d = ddp_model_d.module if hasattr(ddp_model_d, 'module') else ddp_model_d
+            model_to_save = model.module if hasattr(model, 'module') else model
             ckpt = {
-                    'model_g': model_to_save_g.state_dict(),
-                    'model_d': model_to_save_d.state_dict(),
-                    'optimizer_g': optimizer_g.state_dict(),
-                    'optimizer_d': optimizer_d.state_dict(),
-                    'scheduler_g': scheduler_g.state_dict(),
-                    'scheduler_d': scheduler_d.state_dict(),
+                    'model': model_to_save.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
                     'epoch': epoch
                     }
             save_ckpt(checkpoint_fpath=cfg.ckpt_fpath, checkpoint=ckpt)
-            if cfg.wandb.active:
-                wandb.log({
-                    "loss_D": Loss_d.avg,
-                    "loss_G": Loss_g.avg,
-                    "D(x)" : D_x_total.avg,
-                    "D(G(z))": D_G_z_total.avg,
-                    })
-                img = wandb.Image( vutils.make_grid(fake_sample, padding=2,normalize=True).numpy().transpose(1,2,0), caption= f"Generated @ {epoch}")
-                wandb.log({"Examples": img})
-            print("-"*75+ "\n")
-            print(f"| {epoch}-th epoch, D(x): {D_x_total.avg:2.2f}, D(G(z)): {D_G_z_total.avg:2.2f}\n")
-            print("-"*75+ "\n")
+            wandb.log({
+                "loss": Loss.avg,
+                })
+#            print("-"*75+ "\n")
+#            print(f"| {epoch}-th epoch, D(x): {D_x_total.avg:2.2f}, D(G(z)): {D_G_z_total.avg:2.2f}\n")
+#            print("-"*75+ "\n")
         if args.multigpu:
             torch.distributed.barrier()
 #        Loss_g.reset()
@@ -249,39 +184,61 @@ def train(wandb, args, cfg, ddp_model_g, ddp_model_d):
 #        D_G_z_total.reset()
 #        tepoch.close()
 
-def test(wandb, args, cfg, model_g):
-    train_loader = get_data_loader(cfg=cfg, args= args)
-    fixed_noise = torch.randn(cfg.train_batch_size, cfg.n_z, 1,1, device = cfg.device)
+def test(wandb, args, cfg, model, test_loader):
+    # 1. Compute Test Loss
+    # 2. wandb log 2d scatter plot
+    # 3. wandb Image grid plot (fake vs real)
+    # 4. wandb Image grid plot (for different basis)
     model.eval()
-    if args.local_rank in [-1,0]:
+    Loss = AverageMeter()
+    for bat_idx, data in enumerate(test_loader):
         with torch.no_grad():
-            img_real = wandb.Image(
-                    vutils.make_grid(train_loader[0].to(cfg.device)[:64], padding=5, normalize=True),
-                    caption = "Real Image"
-                    )
+            inputs = data[0].to(cfg.device, non_blocking=True)
             with torch.cuda.amp.autocast(enabled=cfg.use_amp):
-                img = model_g(fixed_noise).detach().cpu()
-            img_fake = wandb.Image(
-                    vutils.make_grid(img[:64], padding=5, normalize=True),
-                    caption = "fake image"
+                recon_batch, mu, log_var = model(inputs) 
+                loss = loss_function(recon_batch, inputs, mu, log_var)
+            Loss.update(loss.mean().item(), inputs.size(0))
+        if bat_idx ==0 and args.local_rank in [-1,0]:
+            # 2. img_grid_plot
+            img_real = vutils.make_grid(inputs, padding=2, normalize=True).cpu().numpy().transpose(1,2,0)
+            img_trans = vutils.make_grid(recon_batch.view(-1, 1, cfg.img_size, cfg.img_size), padding=2, normalize=True).cpu().numpy().transpose(1,2,0)
+            img_total = wandb.Image(
+                    np.concatenate(
+                        (img_real, img_trans),
+                        axis=1),
+                    caption = f'left : original, right : fake')
+            wandb.log({"real vs fake" : img_total})
+            # 3. scatter plot 
+            label = data[1].numpy()
+            mu = mu.cpu().detach().numpy()
+            plt.figure(figsize=(8,6))
+            plt.scatter(mu[:,0], mu[:,1], 
+                    c = label, 
+                    cmap = 'gist_rainbow', 
+                    edgecolors='black',
+                    linewidth=0.5
                     )
-            wandb.log({"img_real": img_real, "img_fake": img_fake})
-            # compute the output
-#            with torch.cuda.amp.autocast(enabled=cfg.use_amp):
-#                output = model(inputs).cpu().detach()
-            #example_images.append(wandb.Image(data[0], caption="Pred: {} Truth: {}".format(pred[0].detach().item(), target[0])
-        #wandb.log({"Examples":example_images})
-#    result  = torch.tensor([acc.sum,acc.count]).to(cfg.device)
-#    if args.multigpu:
-#        torch.distributed.barrier()
-##        torch.distributed.all_reduce(result, op =torch.distributed.ReduceOp.SUM)
-#        torch.distributed.reduce(result, op =torch.distributed.ReduceOp.SUM, dst=0)
-#
-#    if args.local_rank in [-1,0]:
-#        print("-"*75+ "\n")
-#        print(f"| Testset accuracy is {result[0].cpu().item()/result[1].cpu().item()} = {result[0].cpu().item()}/{result[1].cpu().item()}\n")
-#        print("-"*75+ "\n")
-
+            plt.colorbar()
+            wandb.log({"chart": wandb.Image(plt)})
+            plt.close()
+    # 4. wandb Image grid plot (for different latents)
+    nx = ny = 20
+    samples = np.mgrid[-3:3:6/nx, -3:3:6/ny].transpose(1,2,0).reshape(nx*ny,-1)
+    samples = model.module.decode(torch.tensor(samples, dtype = torch.float).to(cfg.device))
+    canvas = vutils.make_grid(samples.view(-1,1,cfg.img_size, cfg.img_size), nrow=20).cpu().numpy().transpose(1,2,0)
+    if args.local_rank in [-1,0]:
+        wandb.log({
+            "Latent": wandb.Image(
+                canvas,
+                caption = 'generated figure for various latent vectors')
+                })
+            
+    result = torch.tensor([Loss.sum, Loss.count]).to(cfg.device)
+    if args.multigpu:
+        torch.distributed.barrier()
+        torch.distributed.reduce(result, op=torch.distributed.ReduceOp.SUM, dst=0)
+    if args.local_rank in [-1,0]:
+        wandb.log({"Loss_test" : result[0]/result[1]})
 
 
 def main():
@@ -293,7 +250,8 @@ def main():
             cfg.wandb.active=False
     else:
         args.local_rank = -1
-
+    if not cfg.wandb.active:
+        os.environ['WANDB_SILENT'] = "true"
     if args.local_rank in [-1,0] and cfg.wandb.active:
         wandb.init(project = cfg.wandb.project,
                    entity = cfg.wandb.id,
@@ -320,29 +278,23 @@ def main():
     # torch.distributed.init_process_group(backend="gloo")
 
     # Encapsulate the model on the GPU assigned to the current process
-    model_g = Generator(n_z=cfg.n_z, n_gf = cfg.n_gf, n_c = 3)
-    model_d = Discriminator(n_df= cfg.n_df, n_c=3)
+    model = VAE(img_size = cfg.img_size,
+            n_z = cfg.n_z)
     # if custom_pre-trained model : model.load_from(np.load(<path>))
-    model_g = model_g.to(cfg.device)
-    model_d = model_d.to(cfg.device)
+    model = model.to(cfg.device)
     if args.resume or args.test:
         #ckpt = load_ckpt(cfg.ckpt_fpath, is_best = args.test)
         ckpt = load_ckpt(cfg.ckpt_fpath)
-        model_g.load_state_dict(ckpt['model_g'])
-        model_d.load_state_dict(ckpt['model_d'])
-    else:
-        weights_init(model_g)
-        weights_init(model_d)
+        model.load_state_dict(ckpt['model'])
     if args.multigpu:
-        model_g = torch.nn.parallel.DistributedDataParallel(model_g, device_ids=[args.local_rank], output_device=args.local_rank)
-        model_d = torch.nn.parallel.DistributedDataParallel(model_d, device_ids=[args.local_rank], output_device=args.local_rank)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
 
 
+    train(wandb, args, cfg, model)
 
-    if args.test:
-        test(wandb, args, cfg, model_g)
-    else:
-        train(wandb, args, cfg, model_g, model_d)
+#    if args.test:
+#        test(wandb, args, cfg, model, )
+#    else:
 
 
 if __name__ == '__main__':
