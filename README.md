@@ -91,5 +91,17 @@ sh tools/dist_test.sh <#GPUS>
 
 # VAE
 
+## Results 
+
+### Real vs Fake
+![image](https://user-images.githubusercontent.com/88477912/183818262-fb923bca-790d-4d1c-a784-7aaeee312ea2.png)
+
+### Generated data from random latent vectors
+
+![image](https://user-images.githubusercontent.com/88477912/183818322-7501136f-a611-4ae4-8e3b-4b9e3905cab7.png)
+
+# Diffusion Autoencoder
+
+
 ### License:
 This project is licensed under MIT License - see the LICENSE file for details
