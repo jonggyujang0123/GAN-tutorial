@@ -1,0 +1,38 @@
+# ------ Default 
+weight_decay: 5.0e-4
+decay_type: "cosine"
+use_amp: True        # Use automatic mixed precision
+epochs: 100
+lr : 1.0e-3
+seed : 0
+timesteps: 200
+n_z : 2
+warmup_steps : 100
+random_seed : 0
+beta : 0.5
+# ------ Dataset
+dataset: 'celebA'
+img_size : 64
+channels : 3
+train_batch_size: 64
+test_batch_size: 64
+pin_memory : True
+data_mean : [0.5]
+data_std : [0.5]
+#data_mean : [0.5, 0.5, 0.5]
+#data_std : [0.5, 0.5, 0.5]
+num_workers : 8
+
+
+# Validation Setting"""
+interval_val : 1 
+
+# Save Path"""
+ckpt_fpath : '../experiments/DDPM/celebA'
+
+# WANDB SETTINGS"""
+wandb:
+  project : 'DDPM'
+  id : 'jonggyujang0123'
+  name : 'DDPM-CelebA'
+  active: False
