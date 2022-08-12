@@ -24,7 +24,7 @@ source anaconda3/bin/activate
 conda create -n torch python=3.9
 conda activate torch
 conda install pytorch==1.12.0 torchvision==0.13.0 -c pytorch
-pip install tqdm easydict wandb imageio
+pip install tqdm easydict wandb imageio moviepy
 cd canonicalSGD
 python setup.py develop
 ```
