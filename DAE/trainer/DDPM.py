@@ -9,6 +9,7 @@ import wandb
 import torch.optim as optim
 from einops import rearrange
 import torch.nn.functional as F
+import numpy as np
 class DDPM():
     def __init__(
             self,
@@ -110,7 +111,7 @@ class DDPM():
     # Algorithm 2 (including returning all images)
     @torch.no_grad()
     def p_sample_loop(self, shape):
-        device = next(self.model.parameters()).device()
+        device = self.cfg.device
 
         b = shape[0]
         # start from pure noise (for each example in the batch)
@@ -119,7 +120,7 @@ class DDPM():
 
         for i in tqdm(reversed(range(0, self.timesteps)), desc = 'sampling loop time step', total=self.timesteps):
             img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long),i) 
-            imgs.append(img.cpu().transpose(2, 3, 1))
+            imgs.append(img.cpu())
 
         return imgs
     @torch.no_grad()
@@ -205,7 +206,7 @@ class DDPM():
                     loss = self.p_losses(
                             x_start=inputs,
                             t = t,
-                            loss_type="huber")
+                            loss_type="l1")
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
@@ -230,27 +231,34 @@ class DDPM():
                     })
             if self.args.multigpu:
                 torch.distributed.barrier()
-    def test(self):
-        self.resume(is_best=False)
+    def test(self, in_train = True):
+        if not in_train:
+            self.resume(is_best=False)
         samples = self.sample(
                 img_size = self.cfg.img_size, 
-                batch_size = 64, 
+                batch_size = 16, 
                 channels = self.cfg.channels) 
         # List of images (timesteps) with torch tensor (batch_size, height, width, channel)
         ## Grid View
         if self.args.local_rank in [-1,0]:
+            img = vutils.make_grid(samples[-1]/2. + 0.5, nrow=4).permute(1, 2, 0).numpy()
+            img = 255 * img.astype(np.float64)
             img = wandb.Image(
-                    vutils.make_grid(samples[-1], nrow=8, normalize= True)/2. + 0.5,
+                    img.astype(np.uint8),
                     caption = 'generated figure for vaiorus latent vectors')
             self.wandb.log({
                 "generated" : img
                 })
             ## GIF view
-            gif = wandb.Video(
-                    rearrange(
+            gif = rearrange(
                         torch.cat(samples),
-                        '(t b1 b2) h w c -> t (b1 h) (b2 w) c', b1=8, b2=8).numpy() / 2. + 0.5,
-                    fps = 4, 
+                        '(t b1 b2) c h w -> t (b1 h) (b2 w) c', b1=4, b2=4
+                        ).numpy() / 2. + 0.5
+            gif = 255 * gif.astype(np.float64)
+            gif = rearrange(gif, '(t1 t2) h w c -> t1 t2 h w c', t2 = 30)[:,-1,:,:,:].transpose(0, 3, 1, 2)
+            gif = wandb.Video(
+                    gif.astype(np.uint8),
+                    fps = 1, 
                     format = "gif"
                     )
             self.wandb.log({

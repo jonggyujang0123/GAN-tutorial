@@ -2,11 +2,10 @@
 weight_decay: 5.0e-4
 decay_type: "cosine"
 use_amp: True        # Use automatic mixed precision
-epochs: 100
-lr : 1.0e-3
+epochs: 10
+lr : 8.0e-5
 seed : 0
-timesteps: 200
-n_z : 2
+timesteps: 300
 warmup_steps : 100
 random_seed : 0
 beta : 0.5
@@ -35,4 +34,4 @@ wandb:
   project : 'DDPM'
   id : 'jonggyujang0123'
   name : 'DDPM-CelebA'
-  active: False
+  active: True

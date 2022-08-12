@@ -65,7 +65,7 @@ def main():
         args.local_rank = -1
     if not cfg.wandb.active:
         os.environ['WANDB_SILENT'] = "true"
-    if args.local_rank in [-1,0] and cfg.wandb.active:
+    if args.local_rank in [-1,0]:
         wandb.init(project = cfg.wandb.project,
                    entity = cfg.wandb.id,
                    config = dict(cfg),
@@ -94,7 +94,8 @@ def main():
     model = Unet(
             dim = cfg.img_size,
             channels= cfg.channels,
-            dim_mults = (1, 2, 4,)
+            init_dim=32,
+            dim_mults = (1, 2, 4, 8)
             )
     # if custom_pre-trained model : model.load_from(np.load(<path>))
     model = model.to(cfg.device)
