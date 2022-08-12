@@ -91,6 +91,7 @@ sh tools/dist_test.sh <#GPUS>
 
 # VAE
 
+
 ## Results 
 
 ### Real vs Fake
@@ -102,6 +103,11 @@ sh tools/dist_test.sh <#GPUS>
 
 # Diffusion Autoencoder
 
+## Generated image from random noise
+
+![gif_28_56c545f9c56657d533d6](https://user-images.githubusercontent.com/88477912/184265033-902068f9-f418-467c-92b1-55ef2cfaa73e.gif)
+
+![image](https://user-images.githubusercontent.com/88477912/184265091-f81e7dd8-cab7-49bd-9e3b-67eec0e866ea.png) 
 
 ### License:
 This project is licensed under MIT License - see the LICENSE file for details
