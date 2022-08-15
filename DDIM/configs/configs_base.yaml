@@ -1,0 +1,42 @@
+# ------ Default 
+weight_decay: 5.0e-4
+decay_type: "cosine"
+use_amp: True        # Use automatic mixed precision
+epochs: 20
+lr : 8.0e-5
+seed : 0
+timesteps: 1000
+sampling_timesteps: 250
+warmup_steps : 100 
+random_seed : 0
+beta : 0.5
+p2_loss_weight_gamma : 1.0
+p2_loss_weight_k : 1
+eta : 0.
+clip_denoised : True
+# ------ Dataset
+dataset: 'celebA'
+img_size : 64
+channels : 3
+train_batch_size: 64
+test_batch_size: 64
+pin_memory : True
+data_mean : [0.5]
+data_std : [0.5]
+#data_mean : [0.5, 0.5, 0.5]
+#data_std : [0.5, 0.5, 0.5]
+num_workers : 8
+
+
+# Validation Setting"""
+interval_val : 1 
+
+# Save Path"""
+ckpt_fpath : '../experiments/DDIM/celebA'
+
+# WANDB SETTINGS"""
+wandb:
+  project : 'DDIM'
+  id : 'jonggyujang0123'
+  name : 'DDIM-CelebA'
+  active: True
